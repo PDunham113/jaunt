@@ -2,9 +2,9 @@
 import argparse
 import hashlib
 import os
+import pathlib
 import re
 from bisect import bisect
-from collections import namedtuple
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -28,11 +28,9 @@ MIGR_TABLE = """
 
 PREFIX_TO_TYPE = {"V": "up", "U": "down"}
 
-Migration = namedtuple("Migration", ["type", "num", "desc", "filename"])
-
 
 class Migration:
-    def __init__(self, type: str, ver: int, desc: str, filename: str):
+    def __init__(self, type: str, ver: int, desc: str, file: os.PathLike):
         self.type = type
         if self.type == "up":
             self.ver_from = ver - 1
@@ -43,7 +41,7 @@ class Migration:
         else:
             raise NotImplementedError(self.type)
         self.desc = desc
-        self.filename = filename
+        self.file = file
 
     @property
     def ver(self) -> int:
@@ -53,6 +51,12 @@ class Migration:
             return self.ver_from
         else:
             raise NotImplementedError(self.type)
+
+    def __str__(self) -> str:
+        return f"{self.ver}: {self.desc}"
+
+    def __repr__(self) -> str:
+        return f"{self.ver}: {self.desc:<24}\t ({self.file})"
 
 
 def create(args: argparse.Namespace) -> None:
@@ -110,10 +114,10 @@ def down(args: argparse.Namespace) -> None:
     else:
         print(f"{len(migrations)} migrations to apply:")
         for migr in migrations:
-            print(f"\t{migr.ver}: {migr.desc}\t ({migr.filename})")
+            print(f"\t{migr!r}")
 
         for migr in migrations:
-            print(f"Applying {migr.ver}: {migr.desc}...", end="")
+            print(f"Applying {migr}...", end="")
             with conn.cursor() as cursor:
                 migration_hash = _apply_migration(cursor, migr, migration_hash)
             conn.commit()
@@ -128,7 +132,7 @@ def list_migrations(args: argparse.Namespace) -> None:
     for migr_type, migr_list in migrations.items():
         print(f"{migr_type.title()}:")
         for migr in migr_list:
-            print(f"\t{migr.ver}: {migr.desc}\t ({migr.filename})")
+            print(f"\t{migr!r}")
 
 
 def up(args: argparse.Namespace) -> None:
@@ -167,10 +171,10 @@ def up(args: argparse.Namespace) -> None:
     else:
         print(f"{len(migrations)} migrations to apply:")
         for migr in migrations:
-            print(f"\t{migr.ver}: {migr.desc}\t ({migr.filename})")
+            print(f"\t{migr!r}")
 
         for migr in migrations:
-            print(f"Applying {migr.ver}: {migr.desc}...", end="")
+            print(f"Applying {migr}...", end="")
             with conn.cursor() as cursor:
                 migration_hash = _apply_migration(cursor, migr, migration_hash)
             conn.commit()
@@ -199,7 +203,8 @@ def jaunt_cli() -> None:
     migrate_args.add_argument(
         "-m",
         "--migration-dir",
-        default=".",
+        default=pathlib.Path.cwd(),
+        type=pathlib.Path,
         help="Directory containing migration files",
     )
 
@@ -245,7 +250,7 @@ def jaunt_cli() -> None:
     args.func(args)
 
 
-def _get_migrations_from_dir(path: str) -> Dict[str, List[Migration]]:
+def _get_migrations_from_dir(path: os.PathLike) -> Dict[str, List[Migration]]:
     """Fetches all migration files from a path
 
     Returns a dict of all migrations split by type, with each type sorted in ascending
@@ -253,9 +258,8 @@ def _get_migrations_from_dir(path: str) -> Dict[str, List[Migration]]:
     """
     migrations = {_type: [] for _type in PREFIX_TO_TYPE.values()}
 
-    files = next(os.walk(path))[2]
-    for file in files:
-        match = MIGR_MATCH.fullmatch(file)
+    for file in path.iterdir():
+        match = MIGR_MATCH.fullmatch(file.name)
         if match:
             migr_type = PREFIX_TO_TYPE[match["type"]]
             migr = Migration(migr_type, int(match["num"]), match["desc"], file)
@@ -275,7 +279,7 @@ def _apply_migration(
     cursor: msc.cursor.MySQLCursor, migration: Migration, last_hash: str
 ) -> str:
     """Applies a migration"""
-    with open(migration.filename, "r") as migr_file:
+    with open(migration.file, "r") as migr_file:
         query = migr_file.read()
 
     results = cursor.execute(query, multi=True)
@@ -288,7 +292,7 @@ def _apply_migration(
     to_hash = last_hash + query
     hash = hashlib.sha1(to_hash.encode()).hexdigest()
 
-    _record_migration(cursor, migration.ver_to, migration.filename, hash)
+    _record_migration(cursor, migration.ver_to, migration.file, hash)
 
     return hash
 
