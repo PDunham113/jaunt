@@ -292,7 +292,7 @@ def _apply_migration(
     to_hash = last_hash + query
     hash = hashlib.sha1(to_hash.encode()).hexdigest()
 
-    _record_migration(cursor, migration.ver_to, migration.file, hash)
+    _record_migration(cursor, migration.ver_to, migration.file.name, hash)
 
     return hash
 
